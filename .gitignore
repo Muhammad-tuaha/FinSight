@@ -1,0 +1,33 @@
+# Never commit your real API keys
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+
+# Outputs
+results/
+
+# Webpack & Next.js
+node_modules/
+.next/
+out/
+build/
+
+# Flask
+instance/
+
+# Environment-specific files & Secrets
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS Files
+.DS_Store
+Thumbs.db
+# file i dont want to commit
+file
