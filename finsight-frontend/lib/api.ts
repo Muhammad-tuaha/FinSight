@@ -3,12 +3,19 @@ import { AnalysisResult, FinancialRatios, RedFlag, BackendNarrativeReports } fro
 const FLASK_BASE = process.env.NEXT_PUBLIC_FLASK_URL || 'http://127.0.0.1:5000/api/v1';
 
 export async function checkBackendHealth(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s max wait
   try {
-    const res = await fetch(`${FLASK_BASE}/health`, { cache: 'no-store' });
+    const res = await fetch(`${FLASK_BASE}/health`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
     if (!res.ok) return false;
     const data = await res.json();
     return data.status === 'healthy';
   } catch {
+    clearTimeout(timeoutId);
     return false;
   }
 }

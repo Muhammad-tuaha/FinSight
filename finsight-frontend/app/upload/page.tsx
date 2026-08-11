@@ -24,8 +24,10 @@ export default function UploadPage() {
   const [isDragging, setIsDragging] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [loadingStep, setLoadingStep] = useState(0)
+  const [slowWarning, setSlowWarning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [validateMsg, setValidateMsg] = useState<string | null>(null)
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Drag & Drop ──────────────────────────────────────────────────────────────
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -37,14 +39,19 @@ export default function UploadPage() {
 
   const runValidation = useCallback(async (f: File) => {
     setValidateMsg('Checking PDF structure…')
-    const v = await validateDocument(f)
-    if (v.valid) {
-      const pages = (v as { financial_pages?: number }).financial_pages
-      setValidateMsg(
-        v.message || (pages != null ? `OK — ${pages} financial page(s) detected` : 'PDF structure looks valid'),
-      )
-    } else {
-      setValidateMsg(v.message || 'PDF may not contain readable financial statements')
+    try {
+      const v = await validateDocument(f)
+      if (v.valid) {
+        const pages = (v as { financial_pages?: number }).financial_pages
+        setValidateMsg(
+          v.message || (pages != null ? `OK — ${pages} financial page(s) detected` : 'PDF structure looks valid'),
+        )
+      } else {
+        setValidateMsg(v.message || 'PDF may not contain readable financial statements')
+      }
+    } catch {
+      // Backend unreachable — don't block the user, just clear the validation hint
+      setValidateMsg('Server unavailable — validation skipped, you can still proceed')
     }
   }, [])
 
@@ -79,23 +86,35 @@ export default function UploadPage() {
     setError(null)
     setIsLoading(true)
     setLoadingStep(0)
+    setSlowWarning(false)
 
     const stepInterval = setInterval(() => {
-      setLoadingStep(prev => Math.min(prev + 1, LOADING_STEPS.length - 1))
+      setLoadingStep(prev => {
+        const next = Math.min(prev + 1, LOADING_STEPS.length - 1)
+        // When we reach the last step, start the slow-warning timer
+        if (next === LOADING_STEPS.length - 1) {
+          if (slowTimerRef.current) clearTimeout(slowTimerRef.current)
+          slowTimerRef.current = setTimeout(() => setSlowWarning(true), 10000)
+        }
+        return next
+      })
     }, 3500)
 
     try {
       setLoadingStep(0)
       const result = await analyzeDocument(file, companyName.trim(), sector)
+      if (slowTimerRef.current) clearTimeout(slowTimerRef.current)
       setLoadingStep(LOADING_STEPS.length - 1)
       clearInterval(stepInterval)
       setAnalysis(result, companyName.trim(), sector)
       router.push('/results')
     } catch (err: unknown) {
+      if (slowTimerRef.current) clearTimeout(slowTimerRef.current)
       clearInterval(stepInterval)
       const msg = err instanceof Error ? err.message : 'Analysis failed'
       setError(msg)
       setIsLoading(false)
+      setSlowWarning(false)
     }
   }
 
@@ -109,7 +128,7 @@ export default function UploadPage() {
           borderTopColor: 'var(--accent)',
           borderRadius: '50%',
         }} className="animate-spin-slow" />
-        <div style={{ textAlign: 'center' }}>
+        <div style={{ textAlign: 'center', maxWidth: 360 }}>
           <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 14, color: 'var(--text2)' }}>
             {LOADING_STEPS[loadingStep][0]}
           </div>
@@ -127,6 +146,24 @@ export default function UploadPage() {
               }} />
             ))}
           </div>
+
+          {/* Slow-warning — appears after 10s on the last step */}
+          {slowWarning && (
+            <div style={{
+              marginTop: 20,
+              background: 'rgba(245,166,35,0.08)',
+              border: '1px solid rgba(245,166,35,0.25)',
+              borderRadius: 10,
+              padding: '10px 14px',
+              fontSize: 11,
+              color: '#f5a623',
+              fontFamily: 'IBM Plex Mono, monospace',
+              lineHeight: 1.6,
+              textAlign: 'center',
+            }}>
+              ⏳ This is taking a bit longer than usual — high traffic right now. Pages are still being processed, please wait…
+            </div>
+          )}
         </div>
       </div>
     )
