@@ -1,3 +1,8 @@
+# --- Web Framework & API ---
+flask>=3.0.0
+flask-cors>=4.0.0
+python-dotenv>=1.0.0
+
 # --- PDF parsing ---
 pymupdf>=1.24.0
 pdfplumber>=0.11.0
@@ -5,12 +10,12 @@ pdfplumber>=0.11.0
 # --- Data validation ---
 pydantic>=2.0.0
 
-# --- LLM backends (install the one you use) ---
+# --- LLM backends ---
 google-generativeai>=0.7.0   # FREE — Gemini (recommended)
-# anthropic>=0.28.0           # PAID — Claude (uncomment if needed)
 
 # --- Firebase Admin SDK ---
 firebase-admin>=6.0.0
 
-# --- Production Web Server ---
-gunicorn>=21.2.0
+# --- Production Web Server & PDF Export ---
+gunicorn>=21.2.0
+reportlab>=4.0.0
