@@ -14,10 +14,16 @@ import time
 from datetime import date
 from typing import Any, Optional
 
-# Import the modern Google GenAI SDK
-from google import genai
-from google.genai import types
-from google.genai.errors import ServerError, ClientError
+# Import the modern Google GenAI SDK with fallback
+try:
+    from google import genai
+    from google.genai import types
+    from google.genai.errors import ServerError, ClientError
+except (ImportError, AttributeError):
+    import google.generativeai as genai
+    types = None
+    ServerError = Exception
+    ClientError = Exception
 
 try:
     from google.api_core.exceptions import ResourceExhausted

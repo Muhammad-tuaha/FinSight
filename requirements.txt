@@ -11,7 +11,8 @@ pdfplumber>=0.11.0
 pydantic>=2.0.0
 
 # --- LLM backends ---
-google-generativeai>=0.7.0   # FREE — Gemini (recommended)
+google-genai>=0.1.0
+google-generativeai>=0.7.0
 
 # --- Firebase Admin SDK ---
 firebase-admin>=6.0.0
