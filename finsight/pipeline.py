@@ -72,9 +72,9 @@ def run_analysis(
 
     # ── Step 3: Ratio Computation ─────────────────────────────────────────
     logger.info("Step 3/4 — Ratio computation")
-    current_ratios = compute_ratios(financials.current_period)
+    current_ratios = compute_ratios(financials.current_period, sector=financials.sector or sector)
     prior_ratios = (
-        compute_ratios(financials.prior_period)
+        compute_ratios(financials.prior_period, sector=financials.sector or sector)
         if financials.prior_period else None
     )
 

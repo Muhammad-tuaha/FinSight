@@ -63,17 +63,49 @@ Rules you must follow:
    Parentheses indicate negatives. Use null when a value is not disclosed.
 5. PSX reports often present two years side-by-side (current year and prior year).
    Extract both. The more recent year is "current_period"; the earlier year is "prior_period".
-6. Report your confidence as a float 0.0–1.0 in "extraction_confidence".
-   Use 0.9+ only if figures were clearly stated in tabular format with labels matching the schema.
-7. If figures appear inconsistent (e.g. gross_profit != revenue - COGS), note it in "extraction_notes".
-8. Always populate current_period.company_name and current_period.reporting_period when inferable
-   from the document header or column labels (e.g. "FY2024").
+6. CRITICAL — Confidence scores: Report three separate confidence values (float 0.0–1.0):
+   - "extraction_confidence": how accurately numeric figures were pulled from tables.
+   - "entity_confidence": how confident you are in the company name you identified FROM THE DOCUMENT.
+   - "sector_confidence": how confident you are in the sector you inferred FROM THE DOCUMENT TEXT.
+   Use 0.9+ only if clearly stated; use <0.7 if you had to infer or guess.
+7. CRITICAL — Company name: Read the company name from the document itself (cover page, statement
+   headers, auditor's report). Do NOT use any company name or sector hint provided in the prompt as
+   the authoritative answer — treat it only as a cross-check. If the document name contradicts the
+   hint, trust the document.
+8. CRITICAL — Sector: Infer sector from the company's stated principal activity, industry description,
+   or business overview section in the document. Do NOT default to the sector hint in the prompt.
+   If you cannot determine sector from the document, set sector to null and sector_confidence to 0.0.
+9. CRITICAL — Revenue vs non-operating income: "revenue" must contain ONLY operating sales/fee income
+   as reported under the Revenue or Turnover line of the income statement.
+   Map "other income", "investment income", and "share of profit from associates" to the separate
+   fields other_income and share_of_profit_associates respectively. Do NOT add these to revenue.
+10. CRITICAL — Financial debt vs operating liabilities (SECTOR-CONDITIONAL):
+    a) For NON-FINANCIAL companies (manufacturers, retailers, exchanges, tech, energy, etc.):
+       "long_term_debt" must contain ONLY interest-bearing financial debt (bank loans, bonds,
+       lease liabilities under IFRS 16). Security/margin deposits from exchange members,
+       brokers, or customers are operating liabilities — map to "long_term_deposits".
+    b) For BANKS, DFIs, and NBFCs:
+       Customer deposits are the primary funding base, not operating liabilities.
+       Map them to "long_term_deposits" still (to keep them separate from loans/bonds in
+       "long_term_debt"), but note in extraction_notes that deposits are the key funding source.
+    c) For INSURANCE companies:
+       Policyholder liabilities / unearned premiums are insurance contract liabilities, NOT
+       financial debt. Map to "deferred_liabilities", not "long_term_debt".
+    In ALL cases: "long_term_debt" = only bank borrowings, bonds, sukuk, and IFRS 16 leases.
+11. If figures appear inconsistent (e.g. gross_profit != revenue - COGS), note it in "extraction_notes".
+12. Always populate current_period.company_name and current_period.reporting_period when inferable
+    from the document header or column labels (e.g. "FY2024").
 """
 
 EXTRACTION_PROMPT_TEMPLATE = """Extract financial data from the following annual report text.
 
-Company name: {company_name}
-Reporting sector (if known): {sector}
+CAUTION: The company name and sector below are HINTS provided by the user — they may be incorrect.
+You MUST determine the actual company name and sector by reading the document.
+If the document clearly identifies a different company or principal activity, use what the document says
+and set entity_confidence / sector_confidence accordingly (low if uncertain).
+
+User-supplied hint — company: {company_name}
+User-supplied hint — sector: {sector}
 
 Populate the requested JSON structure accurately based on the text below.
 
@@ -84,8 +116,12 @@ Populate the requested JSON structure accurately based on the text below.
 
 VISION_EXTRACTION_PROMPT = """Extract financial data from the attached scanned annual report page images.
 
-Company name: {company_name}
-Reporting sector (if known): {sector}
+CAUTION: The company name and sector below are HINTS provided by the user — they may be incorrect.
+You MUST determine the actual company name and sector by reading the document pages.
+If the document identifies a different company or principal activity, use what the document says.
+
+User-supplied hint — company: {company_name}
+User-supplied hint — sector: {sector}
 
 The PDF had little or no machine-readable text; these PNG renders are the authoritative source.
 Read every table cell carefully. PSX reports often show current year and prior year side-by-side —
@@ -181,7 +217,7 @@ class LLMExtractor:
         company_name: str,
         sector: Optional[str],
     ) -> ExtractedFinancials:
-        """Fill server-side metadata when the model omits optional fields."""
+        """Fill server-side metadata and emit warnings when entity/sector confidence is low."""
         from pathlib import Path
 
         updates = {}
@@ -189,15 +225,54 @@ class LLMExtractor:
             updates["source_file"] = Path(document.source_path).name
         if not financials.extraction_date:
             updates["extraction_date"] = date.today().isoformat()
-        if not financials.company_name:
+
+        # --- Entity/sector confidence warnings ---
+        entity_conf = financials.entity_confidence
+        sector_conf = financials.sector_confidence
+        warnings: list[str] = []
+
+        if not financials.company_name or financials.company_name.strip() in ("", "Unknown Company", "Unknown"):
+            # Model couldn't identify company from document — fall back with low confidence
             updates["company_name"] = company_name
-        if not financials.sector and sector:
-            updates["sector"] = sector
+            updates["entity_confidence"] = 0.0
+            warnings.append(
+                f"WARNING: Company name could not be reliably identified from the document. "
+                f"Using user-supplied value '{company_name}'. Verify manually."
+            )
+        elif entity_conf is not None and entity_conf < 0.65:
+            warnings.append(
+                f"WARNING: Low entity confidence ({entity_conf:.0%}) for company name "
+                f"'{financials.company_name}'. The extracted name may not match the actual issuer."
+            )
+
+        if not financials.sector or financials.sector.strip() in ("", "Unknown", "General Sector", "Not specified"):
+            if sector:
+                updates["sector"] = sector
+                updates["sector_confidence"] = 0.0
+                warnings.append(
+                    f"WARNING: Sector could not be determined from document. "
+                    f"Using user-supplied hint '{sector}'. Cross-check against company's principal activity."
+                )
+            else:
+                updates["sector"] = None
+                updates["sector_confidence"] = 0.0
+                warnings.append("WARNING: Sector could not be determined from document or user input.")
+        elif sector_conf is not None and sector_conf < 0.65:
+            warnings.append(
+                f"WARNING: Low sector confidence ({sector_conf:.0%}) for '{financials.sector}'. "
+                f"Verify sector classification against principal activity note in the report."
+            )
+
+        # Append warnings to extraction_notes
+        if warnings:
+            existing = financials.extraction_notes or ""
+            combined = (existing + " " if existing else "") + " | ".join(warnings)
+            updates["extraction_notes"] = combined.strip()
 
         cp = financials.current_period
         cp_updates = {}
         if not cp.company_name:
-            cp_updates["company_name"] = company_name
+            cp_updates["company_name"] = updates.get("company_name", company_name)
         if not cp.reporting_period:
             cp_updates["reporting_period"] = "Unknown Period"
         if cp_updates:

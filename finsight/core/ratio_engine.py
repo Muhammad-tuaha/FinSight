@@ -2,6 +2,15 @@
 FinSight — Ratio Computation Engine
 Computes all financial ratios from an extracted FinancialPeriod object.
 Every division is guarded — zero denominators return None, never a 500.
+
+Bug fixes applied:
+  #2 — CR/QR thresholds aligned (done in thresholds.py)
+  #3 — revenue is now strictly operating revenue; other_income and
+        share_of_profit_associates are excluded from margin / turnover denominators
+  #4 — total_debt uses only interest-bearing financial debt (short_term_borrowings +
+        long_term_debt + current_portion_long_term_debt). long_term_deposits
+        (member/broker security deposits) are NOT included.
+  #6 — every ratio now carries a formula footnote in RATIO_FORMULAS for UI display
 """
 
 import logging
@@ -9,6 +18,42 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Sectors where customer deposits are a PRIMARY funding liability
+# (should be included in leverage numerator for a complete picture)
+# ---------------------------------------------------------------------------
+_DEPOSIT_FUNDED_SECTORS = {
+    "bank", "banking", "commercial bank", "dfi", "development finance",
+    "nbfc", "microfinance", "investment bank",
+}
+
+
+# ---------------------------------------------------------------------------
+# Methodology footnotes (Bug #6)
+# ---------------------------------------------------------------------------
+# Key → human-readable formula + notes shown in the UI tooltip / report footnote.
+
+RATIO_FORMULAS: dict[str, str] = {
+    "current_ratio":        "Current Assets ÷ Current Liabilities",
+    "quick_ratio":          "(Current Assets − Inventory) ÷ Current Liabilities",
+    "cash_ratio":           "Cash & Equivalents ÷ Current Liabilities",
+    "gross_margin":         "Gross Profit ÷ Operating Revenue × 100  [Revenue = operating sales/fees only]",
+    "net_margin":           "Net Profit After Tax ÷ Operating Revenue × 100  [Revenue excludes Other Income & Associates' share]",
+    "ebitda_margin":        "EBITDA ÷ Operating Revenue × 100",
+    "roa":                  "Net Profit After Tax ÷ Total Assets × 100",
+    "roe":                  "Net Profit After Tax ÷ Total Equity × 100",
+    "debt_to_equity":       "Financial Debt ÷ Total Equity  [Financial Debt = borrowings + bonds + lease liabilities only; member/broker deposits excluded]",
+    "debt_to_assets":       "Financial Debt ÷ Total Assets  [Financial Debt = interest-bearing obligations only]",
+    "interest_coverage":    "EBIT ÷ Finance Costs",
+    "equity_multiplier":    "Total Assets ÷ Total Equity",
+    "asset_turnover":       "Operating Revenue ÷ Total Assets  [Revenue = operating sales/fees only]",
+    "inventory_turnover":   "Cost of Goods Sold ÷ Inventory",
+    "receivables_turnover": "Operating Revenue ÷ Trade Receivables",
+    "cfo_to_net_income":    "Operating Cash Flow ÷ Net Profit After Tax",
+    "free_cash_flow":       "Operating Cash Flow − Capital Expenditure  (PKR value, not a ratio)",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +136,16 @@ def statements_complete(period) -> bool:
     )
 
 
-def compute_ratios(period) -> ComputedRatios:
+def compute_ratios(period, sector: str | None = None) -> ComputedRatios:
     """
     Compute all supported financial ratios for a single FinancialPeriod.
     Returns a ComputedRatios dataclass. Never raises — all errors are logged.
+
+    sector (optional): when provided, applies sector-conditional logic:
+      - Revenue: always strictly operating revenue (Bug #3)
+      - Financial debt: for deposit-funded sectors (banks/DFIs/NBFCs), long_term_deposits
+        (customer deposits) are included in the leverage numerator since they are the
+        primary funding base. For all other sectors they remain excluded (Bug #4).
     """
     ratios = ComputedRatios()
 
@@ -110,55 +161,86 @@ def compute_ratios(period) -> ComputedRatios:
 
     try:
         # ── Liquidity ────────────────────────────────────────────────────────
-        ratios.current_ratio = _div(getattr(bs, 'total_current_assets', None), getattr(bs, 'total_current_liabilities', None))
+        ratios.current_ratio = _div(
+            getattr(bs, 'total_current_assets', None),
+            getattr(bs, 'total_current_liabilities', None),
+        )
 
-        # Quick assets = current assets - inventory
         total_curr_assets = getattr(bs, 'total_current_assets', None)
-        total_curr_liab = getattr(bs, 'total_current_liabilities', None)
+        total_curr_liab   = getattr(bs, 'total_current_liabilities', None)
         if total_curr_assets is not None and total_curr_liab is not None:
             inventory = getattr(bs, 'inventory', None) or 0.0
             quick_assets = total_curr_assets - inventory
             ratios.quick_ratio = _div(quick_assets, total_curr_liab)
 
-        ratios.cash_ratio = _div(getattr(bs, 'cash_and_equivalents', None), total_curr_liab)
+        ratios.cash_ratio = _div(
+            getattr(bs, 'cash_and_equivalents', None),
+            total_curr_liab,
+        )
 
         # ── Profitability ────────────────────────────────────────────────────
-        ratios.gross_margin        = _pct(getattr(inc, 'gross_profit', None),        getattr(inc, 'revenue', None))
-        ratios.net_margin          = _pct(getattr(inc, 'profit_after_tax', None),    getattr(inc, 'revenue', None))
-        ratios.ebitda_margin       = _pct(getattr(inc, 'ebitda', None),               getattr(inc, 'revenue', None))
-        ratios.roa                 = _pct(getattr(inc, 'profit_after_tax', None),    getattr(bs, 'total_assets', None))
-        ratios.roe                 = _pct(getattr(inc, 'profit_after_tax', None),    getattr(bs, 'total_equity', None))
+        # Bug #3: use strictly operating revenue, never blended with other_income
+        operating_revenue = getattr(inc, 'revenue', None)
+
+        ratios.gross_margin  = _pct(getattr(inc, 'gross_profit', None),     operating_revenue)
+        ratios.net_margin    = _pct(getattr(inc, 'profit_after_tax', None),  operating_revenue)
+        ratios.ebitda_margin = _pct(getattr(inc, 'ebitda', None),            operating_revenue)
+        ratios.roa           = _pct(getattr(inc, 'profit_after_tax', None),  getattr(bs, 'total_assets', None))
+        ratios.roe           = _pct(getattr(inc, 'profit_after_tax', None),  getattr(bs, 'total_equity', None))
 
         # ── Leverage / Solvency ──────────────────────────────────────────────
+        # Bug #4 + sector-conditional: financial debt = interest-bearing obligations only.
+        # Exception: for deposit-funded sectors (banks/DFIs/NBFCs), customer deposits
+        # ARE the primary funding base and must be included for a meaningful D/E ratio.
         st_borrowings = getattr(bs, 'short_term_borrowings', None) or 0.0
-        lt_debt = getattr(bs, 'long_term_debt', None) or 0.0
-        curr_portion = getattr(bs, 'current_portion_long_term_debt', None) or 0.0
-        
-        total_debt = st_borrowings + lt_debt + curr_portion
+        lt_debt       = getattr(bs, 'long_term_debt', None) or 0.0
+        curr_portion  = getattr(bs, 'current_portion_long_term_debt', None) or 0.0
+        lt_deposits   = getattr(bs, 'long_term_deposits', None) or 0.0
 
-        ratios.debt_to_equity   = _div(total_debt, getattr(bs, 'total_equity', None))
-        ratios.debt_to_assets   = _div(total_debt, getattr(bs, 'total_assets', None))
+        sector_norm = (sector or "").strip().lower()
+        is_deposit_funded = any(s in sector_norm for s in _DEPOSIT_FUNDED_SECTORS)
+
+        if is_deposit_funded:
+            # Banks/DFIs: include customer deposits in funding-liability numerator
+            financial_debt = st_borrowings + lt_debt + curr_portion + lt_deposits
+            logger.debug(
+                f"Deposit-funded sector '{sector}': including long_term_deposits "
+                f"({lt_deposits:,.0f}) in leverage numerator."
+            )
+        else:
+            # All other sectors: security/member deposits are operating liabilities, excluded
+            financial_debt = st_borrowings + lt_debt + curr_portion
+
+        ratios.debt_to_equity = _div(financial_debt, getattr(bs, 'total_equity', None))
+        ratios.debt_to_assets = _div(financial_debt, getattr(bs, 'total_assets', None))
+
         finance_costs = getattr(inc, 'finance_costs', None)
         ebit = getattr(inc, 'ebit', None)
         if finance_costs is not None and finance_costs > 0:
             ratios.interest_coverage = _div(ebit, finance_costs)
         elif finance_costs is not None and finance_costs <= 0:
             ratios.interest_coverage = None
-        ratios.equity_multiplier = _div(getattr(bs, 'total_assets', None), getattr(bs, 'total_equity', None))
+        ratios.equity_multiplier = _div(
+            getattr(bs, 'total_assets', None),
+            getattr(bs, 'total_equity', None),
+        )
 
         # ── Efficiency ───────────────────────────────────────────────────────
-        ratios.asset_turnover = _div(getattr(inc, 'revenue', None), getattr(bs, 'total_assets', None))
-        ratios.inventory_turnover = _div(getattr(inc, 'cost_of_goods_sold', None), getattr(bs, 'inventory', None))
-        ratios.receivables_turnover = _div(getattr(inc, 'revenue', None), getattr(bs, 'trade_receivables', None))
+        # Bug #3: asset_turnover and receivables_turnover use operating revenue only
+        ratios.asset_turnover        = _div(operating_revenue, getattr(bs, 'total_assets', None))
+        ratios.inventory_turnover    = _div(getattr(inc, 'cost_of_goods_sold', None), getattr(bs, 'inventory', None))
+        ratios.receivables_turnover  = _div(operating_revenue, getattr(bs, 'trade_receivables', None))
 
         # ── Cash flow ────────────────────────────────────────────────────────
-        ratios.cfo_to_net_income = _div(getattr(cf, 'cfo', None), getattr(inc, 'profit_after_tax', None))
+        ratios.cfo_to_net_income = _div(
+            getattr(cf, 'cfo', None),
+            getattr(inc, 'profit_after_tax', None),
+        )
 
-        # Free cash flow: use disclosed value first, else compute CFO - capex
         fcf_disclosed = getattr(cf, 'free_cash_flow', None)
-        cfo_val = getattr(cf, 'cfo', None)
+        cfo_val   = getattr(cf, 'cfo', None)
         capex_val = getattr(cf, 'capex', None)
-        
+
         if fcf_disclosed is not None:
             ratios.free_cash_flow = fcf_disclosed
         elif cfo_val is not None and capex_val is not None:

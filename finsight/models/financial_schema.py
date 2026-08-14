@@ -10,9 +10,11 @@ from datetime import date
 
 class IncomeStatement(BaseModel):
     """Extracted income statement figures (PKR thousands unless noted)."""
-    revenue: Optional[float] = Field(None, description="Net revenue / turnover")
+    revenue: Optional[float] = Field(None, description="Net revenue / turnover — operating sales revenue ONLY. Exclude other income and associates' profit.")
     cost_of_goods_sold: Optional[float] = Field(None, description="Cost of sales / COGS")
     gross_profit: Optional[float] = Field(None, description="Gross profit")
+    other_income: Optional[float] = Field(None, description="Other income / non-operating income — separate from revenue")
+    share_of_profit_associates: Optional[float] = Field(None, description="Share of profit from associates / equity-method income — separate from revenue")
     operating_expenses: Optional[float] = Field(None, description="Total operating / distribution + admin expenses")
     ebitda: Optional[float] = Field(None, description="EBITDA if disclosed, else computed")
     depreciation_amortization: Optional[float] = Field(None, description="D&A charges")
@@ -39,13 +41,14 @@ class BalanceSheet(BaseModel):
     total_non_current_assets: Optional[float] = None
     total_assets: Optional[float] = None
 
-    # Liabilities
-    short_term_borrowings: Optional[float] = None
+    # Liabilities — financial debt separated from operating liabilities
+    short_term_borrowings: Optional[float] = Field(None, description="Bank borrowings, short-term loans — interest-bearing ONLY")
     trade_payables: Optional[float] = None
     other_current_liabilities: Optional[float] = None
-    current_portion_long_term_debt: Optional[float] = None
+    current_portion_long_term_debt: Optional[float] = Field(None, description="Current portion of long-term FINANCIAL debt — loans/bonds only, NOT deposits or trade payables")
     total_current_liabilities: Optional[float] = None
-    long_term_debt: Optional[float] = None
+    long_term_debt: Optional[float] = Field(None, description="Long-term FINANCIAL debt only — bank loans, bonds, lease liabilities. Member/broker security deposits are NOT financial debt.")
+    long_term_deposits: Optional[float] = Field(None, description="Security deposits from members/brokers — operating liability, NOT financial debt")
     deferred_liabilities: Optional[float] = None
     total_non_current_liabilities: Optional[float] = None
     total_liabilities: Optional[float] = None
@@ -88,7 +91,15 @@ class ExtractedFinancials(BaseModel):
     prior_period: Optional[FinancialPeriod] = None
     extraction_confidence: Optional[float] = Field(
         None, ge=0, le=1,
-        description="LLM self-reported confidence 0–1"
+        description="LLM confidence in numeric figure extraction 0–1"
+    )
+    entity_confidence: Optional[float] = Field(
+        None, ge=0, le=1,
+        description="LLM confidence in company name identification 0–1 (separate from numeric confidence)"
+    )
+    sector_confidence: Optional[float] = Field(
+        None, ge=0, le=1,
+        description="LLM confidence in sector classification 0–1 (separate from numeric confidence)"
     )
     extraction_notes: Optional[str] = Field(
         None, description="Warnings or caveats from extraction"

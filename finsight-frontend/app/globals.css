@@ -20,6 +20,7 @@
   --text3: #555e72;
   --radius: 10px;
   --radius-lg: 16px;
+  --mobile-nav-h: 64px;
 }
 
 * { box-sizing: border-box; }
@@ -42,15 +43,48 @@ html, body {
 /* Selection */
 ::selection { background: rgba(0,229,160,0.2); }
 
-/* Status pulse animation */
+/* Animations */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
-
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
-
 .animate-pulse-dot { animation: pulse-dot 2s infinite; }
-.animate-spin-slow { animation: spin 0.8s linear infinite; }
+.animate-spin-slow  { animation: spin 0.8s linear infinite; }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+.page-wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+@media (max-width: 767px) {
+  /* Main content offset for fixed mobile navbar */
+  .main-content { padding-top: var(--mobile-nav-h) !important; }
+
+  .page-wrapper { min-height: calc(100vh - var(--mobile-nav-h)); }
+
+  /* Upload form: single column */
+  .form-grid { grid-template-columns: 1fr !important; }
+
+  /* Reduced page padding on small screens */
+  .page-pad { padding: 16px !important; }
+
+  /* Centered loading screens: offset for navbar */
+  .centered-screen { padding-top: var(--mobile-nav-h); }
+}
+
+/* Hide on desktop */
+@media (min-width: 768px) {
+  .mobile-only { display: none !important; }
+}
+
+/* Hide on mobile */
+@media (max-width: 767px) {
+  .desktop-only { display: none !important; }
+}

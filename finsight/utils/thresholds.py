@@ -20,20 +20,29 @@ def ratio_status_label(key: str, value: Optional[float]) -> str:
 
 
 def ratio_status_class(key: str, value: float) -> str:
-    """Return good | warn | danger."""
+    """Return good | warn | danger.
+
+    Thresholds are intentionally aligned so identical CR/QR values (common when
+    inventory=0) produce the same status label.  Previous version used >= 2.0 for
+    CR 'good' but >= 1.0 for QR 'good', giving inconsistent labels for equal values.
+    """
     rules = {
-        "current_ratio": lambda v: "good" if v >= 2 else "warn" if v >= 1 else "danger",
-        "quick_ratio": lambda v: "good" if v >= 1 else "warn" if v >= 0.7 else "danger",
-        "cash_ratio": lambda v: "good" if v >= 0.5 else "warn" if v >= 0.2 else "danger",
-        "gross_margin": lambda v: "good" if v >= 30 else "warn" if v >= 15 else "danger",
-        "net_margin": lambda v: "good" if v >= 10 else "warn" if v >= 4 else "danger",
-        "roa": lambda v: "good" if v >= 6 else "warn" if v >= 2 else "danger",
-        "roe": lambda v: "good" if v >= 15 else "warn" if v >= 8 else "danger",
-        "debt_to_equity": lambda v: "good" if v <= 1 else "warn" if v <= 2 else "danger",
-        "interest_coverage": lambda v: "good" if v >= 3 else "warn" if v >= 1.5 else "danger",
-        "asset_turnover": lambda v: "good" if v >= 1 else "warn" if v >= 0.5 else "danger",
-        "inventory_turnover": lambda v: "good" if v >= 6 else "warn" if v >= 3 else "danger",
-        "receivables_turnover": lambda v: "good" if v >= 8 else "warn" if v >= 5 else "danger",
+        # Liquidity: aligned thresholds — same cut-offs for CR and QR
+        "current_ratio": lambda v: "good" if v >= 1.5 else "warn" if v >= 1.0 else "danger",
+        "quick_ratio":   lambda v: "good" if v >= 1.5 else "warn" if v >= 1.0 else "danger",
+        "cash_ratio":    lambda v: "good" if v >= 0.5 else "warn" if v >= 0.2 else "danger",
+        # Profitability
+        "gross_margin":  lambda v: "good" if v >= 30 else "warn" if v >= 15 else "danger",
+        "net_margin":    lambda v: "good" if v >= 10 else "warn" if v >= 4  else "danger",
+        "roa":           lambda v: "good" if v >= 6  else "warn" if v >= 2  else "danger",
+        "roe":           lambda v: "good" if v >= 15 else "warn" if v >= 8  else "danger",
+        # Leverage
+        "debt_to_equity":     lambda v: "good" if v <= 1   else "warn" if v <= 2   else "danger",
+        "interest_coverage":  lambda v: "good" if v >= 3   else "warn" if v >= 1.5 else "danger",
+        # Efficiency
+        "asset_turnover":        lambda v: "good" if v >= 1 else "warn" if v >= 0.5 else "danger",
+        "inventory_turnover":    lambda v: "good" if v >= 6 else "warn" if v >= 3   else "danger",
+        "receivables_turnover":  lambda v: "good" if v >= 8 else "warn" if v >= 5   else "danger",
     }
     fn = rules.get(key)
     return fn(value) if fn else "warn"

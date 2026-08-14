@@ -1,6 +1,23 @@
 import { AnalysisResult, FinancialRatios, RedFlag, BackendNarrativeReports } from '@/types'
+import { getAuthToken } from './firebase'
 
 const FLASK_BASE = process.env.NEXT_PUBLIC_FLASK_URL || 'http://127.0.0.1:5000/api/v1';
+
+export class ApiError extends Error {
+  status: number
+  code?: string
+  reportsUsed?: number
+  plan?: string
+
+  constructor(message: string, status: number, code?: string, reportsUsed?: number, plan?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.reportsUsed = reportsUsed
+    this.plan = plan
+  }
+}
 
 export async function checkBackendHealth(): Promise<boolean> {
   const controller = new AbortController();
@@ -62,21 +79,35 @@ function normalizeAnalysisPayload(raw: Record<string, unknown>): AnalysisResult 
 export async function analyzeDocument(
   file: File,
   companyName: string,
-  sector: string
+  sector: string,
+  explicitToken?: string | null
 ): Promise<AnalysisResult> {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('company_name', companyName)
   formData.append('sector', sector)
 
+  const token = explicitToken ?? (await getAuthToken())
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   const res = await fetch(`${FLASK_BASE}/analyze`, {
     method: 'POST',
+    headers,
     body: formData,
   })
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Unknown server error' }))
-    throw new Error(err.error || `Server returned ${res.status}`)
+    throw new ApiError(
+      err.message || err.error || `Server returned ${res.status}`,
+      res.status,
+      err.code,
+      err.reports_used,
+      err.plan
+    )
   }
 
   const raw = await res.json()
@@ -89,11 +120,20 @@ export async function downloadReport(
   ratios: FinancialRatios,
   redFlags: RedFlag[],
   narrativeReports?: BackendNarrativeReports,
-  summary?: string
+  summary?: string,
+  explicitToken?: string | null
 ): Promise<Blob> {
+  const token = explicitToken ?? (await getAuthToken())
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   const res = await fetch(`${FLASK_BASE}/report`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({
       company_name: companyName,
       sector,
@@ -105,7 +145,14 @@ export async function downloadReport(
   })
 
   if (!res.ok) {
-    throw new Error('Report generation failed — check backend logs')
+    const err = await res.json().catch(() => ({ error: 'Report generation failed' }))
+    throw new ApiError(
+      err.message || err.error || 'Report generation failed',
+      res.status,
+      err.code,
+      err.reports_used,
+      err.plan
+    )
   }
 
   return res.blob()

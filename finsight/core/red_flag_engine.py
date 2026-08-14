@@ -207,7 +207,14 @@ def _check_leverage(ratios: ComputedRatios, flags: list) -> None:
         ))
 
 
-def _check_efficiency(ratios: ComputedRatios, flags: list) -> None:
+# Sectors where low asset turnover is structurally expected and should NOT be flagged
+_ASSET_LIGHT_OR_INVESTMENT_HEAVY_SECTORS = {
+    "exchange", "stock exchange", "financial services", "investment",
+    "insurance", "banking", "holding", "real estate", "reit",
+}
+
+
+def _check_efficiency(ratios: ComputedRatios, flags: list, sector: str | None = None) -> None:
     inv_t = ratios.inventory_turnover
     rec_t = ratios.receivables_turnover
     at    = ratios.asset_turnover
@@ -227,11 +234,26 @@ def _check_efficiency(ratios: ComputedRatios, flags: list) -> None:
         ))
 
     if at is not None and at < 0.3:
-        flags.append(_flag(
-            "LOW", "Efficiency",
-            "Low Asset Utilisation",
-            f"Asset turnover of {at:.2f}x indicates the company generates limited revenue relative to its asset base. Capital-intensive sectors should benchmark against peers."
-        ))
+        # Bug #5: suppress generic asset-turnover flag for sectors where low AT is by design
+        sector_norm = (sector or "").strip().lower()
+        is_investment_heavy = any(s in sector_norm for s in _ASSET_LIGHT_OR_INVESTMENT_HEAVY_SECTORS)
+
+        if is_investment_heavy:
+            # Informational only — not a concern flag
+            flags.append(_flag(
+                "LOW", "Efficiency",
+                "Asset Turnover: Sector-Normal (Informational)",
+                f"Asset turnover of {at:.2f}x is low by manufacturing benchmarks but structurally expected "
+                f"for a '{sector}' business model with large long-term investments or balance-sheet-heavy operations. "
+                f"Benchmark against sector peers rather than generic thresholds."
+            ))
+        else:
+            flags.append(_flag(
+                "LOW", "Efficiency",
+                "Low Asset Utilisation",
+                f"Asset turnover of {at:.2f}x indicates the company generates limited revenue relative to its asset base. "
+                f"Capital-intensive sectors should benchmark against peers."
+            ))
 
 
 def _check_cashflow(ratios: ComputedRatios, flags: list) -> None:
@@ -297,18 +319,20 @@ def detect_red_flags(
 ) -> RedFlagReport:
     """
     Run all rule-based checks. If current_ratios are not pre-computed,
-    they are computed internally.
+    they are computed internally. Sector is passed through to efficiency
+    checks so business-model-aware suppression can apply (Bug #5).
     """
     if current_ratios is None:
         current_ratios = compute_ratios(financials.current_period)
 
+    sector = getattr(financials, "sector", None)
     flags: list[RedFlagItem] = []
 
     try:
         _check_liquidity(current_ratios, flags)
         _check_profitability(current_ratios, flags)
         _check_leverage(current_ratios, flags)
-        _check_efficiency(current_ratios, flags)
+        _check_efficiency(current_ratios, flags, sector=sector)
         _check_cashflow(current_ratios, flags)
         _check_yoy(financials, flags)
     except Exception as e:
