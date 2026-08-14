@@ -6,9 +6,14 @@ and high-fidelity institutional PDF analytics report generation.
 
 import io
 import os
+import sys
 import logging
 import time
 from datetime import date
+
+# Ensure finsight directory is in sys.path for relative imports on production servers
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from flask import Flask, request, jsonify, send_file, g
 from flask_cors import CORS
 
