@@ -10,4 +10,7 @@ google-generativeai>=0.7.0   # FREE — Gemini (recommended)
 # anthropic>=0.28.0           # PAID — Claude (uncomment if needed)
 
 # --- Firebase Admin SDK ---
-firebase-admin>=6.0.0
+firebase-admin>=6.0.0
+
+# --- Production Web Server ---
+gunicorn>=21.2.0
